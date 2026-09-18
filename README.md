@@ -47,6 +47,25 @@ Apple Silicon and MLX support are intentionally not included in the first versio
 
 OpenCV is not part of the planned dependency set. The initial scope only needs Pillow and NumPy for image loading and mask/box overlays. We will reconsider it only if a future capability specifically requires it.
 
+## Phase 0: local validation
+
+Phase 0 is implemented as a CUDA validation harness. It creates an isolated environment, checks GPU readiness, and has separate smoke tests for each model. The tests intentionally load one model at a time.
+
+```powershell
+Copy-Item .env.example .env
+# Authenticate first if the Gemma model requires approval for your account.
+huggingface-cli login
+
+.\scripts\bootstrap.ps1
+.\.venv\Scripts\python.exe .\scripts\validate_environment.py
+.\.venv\Scripts\python.exe .\scripts\smoke_falcon.py --image .\images\dog_running_in_park.jpg --query dog
+.\.venv\Scripts\python.exe .\scripts\smoke_gemma.py --image .\images\dog_running_in_park.jpg
+```
+
+The detected local hardware is an RTX 4050 Laptop GPU with 6 GiB VRAM. That is likely sufficient to test Falcon, but unlikely to fit the referenced Gemma 4 E4B CUDA checkpoint at its native precision. The Gemma smoke test is included to measure the real outcome; if it fails for memory, Phase 0 will recommend either a supported quantized CUDA model path or a GPU with more VRAM before building the agent UI.
+
+See [PHASE0_REPORT.md](PHASE0_REPORT.md) for the recorded local hardware result and the Phase 0 acceptance status.
+
 ## Repository structure
 
 ```text
