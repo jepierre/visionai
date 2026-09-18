@@ -16,7 +16,7 @@ The agent uses:
 - Windows or Linux host with a CUDA-capable NVIDIA GPU.
 - Python 3.10+.
 - CUDA-compatible PyTorch and torchvision.
-- Hugging Face access for the Gemma model, including any required authentication.
+- A local Ollama runtime serving a quantized Gemma 4B-class model.
 - Sufficient GPU memory for the selected Gemma 4 checkpoint and Falcon Perception; validate this before UI work begins.
 
 ## Architecture
@@ -43,11 +43,37 @@ The Python service owns models and inference. The browser never accesses the fil
 
 ## Phase 0 — Validate the local inference stack
 
+**Status (2026-09-18): Partially ready; local inference validation is pending.**
+
+- The detected host is Linux with Python 3.10.12, an NVIDIA GeForce RTX 3070, approximately 8 GiB of GPU memory, and NVIDIA driver 595.58.03.
+- The repository `.venv` exists, but the CUDA/PyTorch and Falcon dependency installation still needs to be validated.
+- The Gemma runtime is intentionally Ollama-only for this project. Ollama is not currently available in `PATH`, and a local 4B-class model has not yet been pulled.
+- The sample validation image is `images/dog_running_in_park.jpg`.
+- The RTX 3070 is a reasonable fit for a quantized Gemma 4B-class model, but Falcon and Gemma must be tested separately to avoid GPU memory pressure. Larger checkpoints may exceed the available VRAM.
+
 1. Create the Python environment and install CUDA/PyTorch dependencies plus the Falcon Perception PyTorch package.
-2. Configure and authenticate model downloads for the instruction-tuned Gemma 4 E4B checkpoint.
+      **Status:** `.venv` has been created; dependency and CUDA validation remain pending.
+2. Install and start Ollama, then pull a local 4B-class Gemma model such as `gemma3:4b`.
+      **Status:** blocked until Ollama is installed and the model is available locally; Hugging Face is not the planned runtime path.
 3. Add a small script that loads Falcon, runs a known image/object query, and writes normalized detection metadata.
+      **Status:** smoke-test script is present; execution remains pending dependency validation.
 4. Add a second script that loads Gemma and answers a visual question about the same image.
+      **Status:** smoke-test script is present; execution remains pending Ollama setup.
 5. Record GPU name, VRAM, load times, and inference timings in the developer notes.
+      **Status:** hardware details are recorded above; model load and inference timings remain pending.
+
+**Next validation commands:**
+
+```bash
+source .venv/bin/activate
+ollama serve
+ollama pull gemma3:4b
+python scripts/validate_environment.py
+python scripts/smoke_falcon.py --image images/dog_running_in_park.jpg --query dog
+python scripts/smoke_gemma.py --image images/dog_running_in_park.jpg --model gemma3:4b
+```
+
+If the local Ollama registry uses a different 4B model tag, pass it with `--model` or set `OLLAMA_MODEL`.
 
 **Exit criteria:** both models load locally, Falcon emits valid detections, and Gemma returns an answer for a test image.
 

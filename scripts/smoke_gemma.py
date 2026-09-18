@@ -1,54 +1,83 @@
-"""Load Gemma 4 and run one image-question CUDA inference.
+"""Run a single image prompt through a local Ollama-backed Gemma 4B model.
 
-Run this separately from smoke_falcon.py. An RTX 4050 Laptop GPU has 6 GiB
-of VRAM, which is unlikely to fit the referenced 4B CUDA checkpoint at its
-native precision. The script makes that limitation observable rather than
-attempting unsafe concurrent model loading.
+This smoke test intentionally avoids Hugging Face and instead uses the local
+Ollama API running on the same machine. The default model name is a 4B-class
+Gemma tag such as `gemma3:4b`, which can be overridden via the CLI or the
+`OLLAMA_MODEL` environment variable.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import json
 import os
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from PIL import Image
 
 
+def _call_ollama(model: str, prompt: str, image_path: Path, base_url: str) -> tuple[str, float, str]:
+    image_bytes = image_path.read_bytes()
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "images": [base64.b64encode(image_bytes).decode("utf-8")],
+        "stream": False,
+    }
+    endpoint = f"{base_url.rstrip('/')}/api/generate"
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    started = time.perf_counter()
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise SystemExit(
+            f"Ollama is not reachable at {endpoint}. Start `ollama serve`, pull a local model, and retry.\n{exc}"
+        ) from exc
+
+    elapsed = time.perf_counter() - started
+    answer = str(payload.get("response", "")).strip()
+    if not answer:
+        raise SystemExit(f"Ollama returned no response for model {model!r}: {payload!r}")
+    return answer, elapsed, str(payload.get("model", model))
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--image", type=Path, required=True)
-    parser.add_argument("--prompt", default="Describe this image in one sentence.")
+    parser = argparse.ArgumentParser(description="Run a local Gemma 4B smoke test via Ollama.")
+    parser.add_argument("--image", type=Path, required=True, help="Path to the input image.")
+    parser.add_argument("--prompt", default="Describe this image in one sentence.", help="Text question or instruction to send with the image.")
+    parser.add_argument(
+        "--model",
+        default=os.getenv("OLLAMA_MODEL", "gemma3:4b"),
+        help="Local Ollama model tag to use. Typical 4B examples: gemma3:4b or a custom local tag.",
+    )
+    parser.add_argument(
+        "--ollama-url",
+        default=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        help="Base URL for the local Ollama API server.",
+    )
     args = parser.parse_args()
+
     if not args.image.is_file():
         raise SystemExit(f"Image does not exist: {args.image}")
 
-    import torch
-    from transformers import AutoModelForMultimodalLM, AutoProcessor
+    with Image.open(args.image) as image:
+        image.convert("RGB")
 
-    if not torch.cuda.is_available():
-        raise SystemExit("CUDA PyTorch is required. Run scripts/bootstrap.ps1 and retry.")
-
-    model_id = os.getenv("GEMMA_HF_MODEL_ID", "google/gemma-4-E4B-it")
-    started = time.perf_counter()
-    processor = AutoProcessor.from_pretrained(model_id)
-    model = AutoModelForMultimodalLM.from_pretrained(model_id, dtype="auto", device_map="auto")
-    load_seconds = time.perf_counter() - started
-
-    image = Image.open(args.image).convert("RGB")
-    messages = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": args.prompt}]}]
-    inputs = processor.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", add_generation_prompt=True)
-    inputs = inputs.to(model.device)
-    input_length = inputs["input_ids"].shape[-1]
-    started = time.perf_counter()
-    with torch.inference_mode():
-        output = model.generate(**inputs, max_new_tokens=128, do_sample=False)
-    answer = processor.decode(output[0][input_length:], skip_special_tokens=True).strip()
-    inference_seconds = time.perf_counter() - started
-    print(f"Gemma loaded in {load_seconds:.1f}s")
+    answer, inference_seconds, model_name = _call_ollama(args.model, args.prompt, args.image, args.ollama_url)
+    print(f"Ollama model: {model_name}")
     print(f"Answer: {answer}")
-    print(f"Inference: {inference_seconds:.1f}s; peak VRAM: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GiB")
+    print(f"Inference: {inference_seconds:.1f}s")
     return 0
 
 
