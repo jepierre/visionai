@@ -9,6 +9,7 @@ from PIL import Image
 
 from backend.app.config import Settings
 from backend.app.rendering.annotations import AnnotationRenderer, DetectedObject
+from backend.app.schemas import ModelInfo, TraceStep
 
 
 class FalconUnavailableError(RuntimeError):
@@ -21,6 +22,10 @@ class DetectionRun:
     detections: list[DetectedObject]
     annotated_file_name: str | None
     timings: dict[str, float]
+    model_name: str
+    trace: list[TraceStep]
+    reasoning: str
+    final_output: str
     message: str | None = None
 
 
@@ -38,6 +43,11 @@ class FalconDetector:
 
     def detect(self, image_path: Path, object_query: str, annotation_mode: str, render: bool = True) -> DetectionRun:
         model, tokenizer, model_args, torch = self._ensure_model()
+
+        trace = [
+            TraceStep(title="Load Falcon context", detail=f"Prepare Falcon for query {object_query!r}.", model=self._settings.falcon_model_id),
+            TraceStep(title="Open image", detail=f"Load source image {image_path.name}.", model=None),
+        ]
 
         with Image.open(image_path) as source:
             image = source.convert("RGB")
@@ -66,13 +76,40 @@ class FalconDetector:
         detections = self._normalize_detections(auxiliary[0], object_query)
         annotated_file_name = self._renderer.render(image_path, detections, annotation_mode) if render else None
         message = None if detections else f"No detections found for {object_query!r}."
+        trace.append(
+            TraceStep(
+                title="Run Falcon inference",
+                detail=f"Falcon produced {len(detections)} detection(s) for {object_query!r}.",
+                model=self._settings.falcon_model_id,
+            )
+        )
+        if render:
+            trace.append(
+                TraceStep(
+                    title="Render overlays",
+                    detail=(
+                        f"Rendered {annotation_mode} overlay to {annotated_file_name}."
+                        if annotated_file_name
+                        else "No overlay generated because there were no detections."
+                    ),
+                    model=None,
+                )
+            )
+        final_output = f"Falcon detected {len(detections)} match(es) for {object_query!r}."
         return DetectionRun(
             object_query=object_query,
             detections=detections,
             annotated_file_name=annotated_file_name,
             message=message,
+            model_name=self._settings.falcon_model_id,
+            trace=trace,
+            reasoning=f"Falcon-only mode ran segmentation for {object_query!r} and returned {len(detections)} detection(s).",
+            final_output=final_output,
             timings={"inference_seconds": perf_counter() - started},
         )
+
+    def model_info(self) -> ModelInfo:
+        return ModelInfo(name=self._settings.falcon_model_id, role="Grounding and segmentation")
 
     def _ensure_model(self):
         if self._model is not None:

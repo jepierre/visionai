@@ -9,6 +9,7 @@ from pathlib import Path
 from time import perf_counter
 
 from backend.app.config import Settings
+from backend.app.schemas import ModelInfo
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -25,6 +26,10 @@ class OllamaResult:
 class OllamaVisionClient:
     def __init__(self, settings: Settings):
         self._settings = settings
+
+    @property
+    def default_model(self) -> str:
+        return self._settings.ollama_model
 
     def generate(self, prompt: str, image_path: Path, model: str | None = None) -> OllamaResult:
         resolved_model = model or self._settings.ollama_model
@@ -58,3 +63,21 @@ class OllamaVisionClient:
             model=str(response_payload.get("model", resolved_model)),
             duration_seconds=perf_counter() - started,
         )
+
+    def list_models(self) -> list[str]:
+        endpoint = f"{self._settings.ollama_base_url.rstrip('/')}/api/tags"
+        request = urllib.request.Request(endpoint, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                response_payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.URLError as exc:
+            raise OllamaUnavailableError(
+                f"Ollama is not reachable at {endpoint}. Start the local Ollama service and pull {self._settings.ollama_model}."
+            ) from exc
+
+        models = response_payload.get("models", [])
+        names = [str(item.get("name", "")).strip() for item in models if str(item.get("name", "")).strip()]
+        return names
+
+    def model_info(self) -> ModelInfo:
+        return ModelInfo(name=self._settings.ollama_model, role="Visual reasoning and final answer generation")

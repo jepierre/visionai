@@ -11,7 +11,16 @@ from backend.app.config import get_settings
 from backend.app.models.falcon import FalconDetector, FalconUnavailableError
 from backend.app.models.ollama import OllamaUnavailableError, OllamaVisionClient
 from backend.app.rendering.annotations import AnnotationRenderer
-from backend.app.schemas import ChatRequest, ChatResponse, DetectRequest, DetectResponse, DetectionRecord, ImageCatalogResponse
+from backend.app.schemas import (
+    ChatRequest,
+    ChatResponse,
+    DetectRequest,
+    DetectResponse,
+    DetectionRecord,
+    ImageCatalogResponse,
+    OllamaModelListResponse,
+    OllamaModelSummary,
+)
 from backend.app.services.images import ImageCatalogService
 
 settings = get_settings()
@@ -39,6 +48,18 @@ def healthcheck() -> dict[str, str]:
 @app.get("/api/images", response_model=ImageCatalogResponse)
 def list_images() -> ImageCatalogResponse:
     return ImageCatalogResponse(images=image_catalog.list_images())
+
+
+@app.get("/api/ollama/models", response_model=OllamaModelListResponse)
+def list_ollama_models() -> OllamaModelListResponse:
+    try:
+        models = ollama_client.list_models()
+    except OllamaUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return OllamaModelListResponse(
+        models=[OllamaModelSummary(name=name) for name in models],
+        default_model=ollama_client.default_model,
+    )
 
 
 @app.get("/api/images/{image_id}/file")
@@ -96,8 +117,14 @@ def detect_objects(request: DetectRequest) -> DetectResponse:
         image_id=request.image_id,
         object_query=request.object_query,
         annotation_mode=request.annotation_mode,
+        original_image_url=f"/api/images/{request.image_id}/file",
         annotated_image_url=annotated_image_url,
         detections=detections,
+        execution_mode="falcon",
+        models_used=[falcon_detector.model_info()],
+        trace=run.trace,
+        reasoning=run.reasoning,
+        final_output=run.final_output,
         message=run.message,
         timings=run.timings,
     )
@@ -111,7 +138,14 @@ def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     try:
-        run = chat_orchestrator.answer(record.path, request.query, request.annotation_mode)
+        run = chat_orchestrator.answer(
+            record.path,
+            request.query,
+            request.annotation_mode,
+            execution_mode=request.execution_mode,
+            object_query=request.object_query,
+            ollama_model=request.ollama_model,
+        )
     except FalconUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except OllamaUnavailableError as exc:
@@ -133,8 +167,14 @@ def chat(request: ChatRequest) -> ChatResponse:
         query=request.query,
         answer=run.answer,
         route=run.route,
+        execution_mode=run.execution_mode,
+        original_image_url=f"/api/images/{request.image_id}/file",
         annotated_image_url=annotated_image_url,
         detections=detections,
+        models_used=run.models_used,
+        trace=run.trace,
+        reasoning=run.reasoning,
+        final_output=run.final_output,
         message=run.message,
         timings=run.timings,
     )

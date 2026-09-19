@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -12,6 +12,7 @@ from backend.app.main import app
 from backend.app.models.falcon import FalconUnavailableError
 from backend.app.models.ollama import OllamaUnavailableError
 from backend.app.rendering.annotations import DetectedObject
+from backend.app.schemas import ModelInfo, TraceStep
 
 
 class VisionApiTests(unittest.TestCase):
@@ -52,6 +53,30 @@ class VisionApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"images": fake_images})
+
+    def test_list_ollama_models_returns_available_models(self) -> None:
+        with patch("backend.app.main.ollama_client.list_models", return_value=["gemma3:4b", "llava:7b"]), patch(
+            "backend.app.models.ollama.OllamaVisionClient.default_model", new_callable=PropertyMock, return_value="gemma3:4b"
+        ):
+            response = self.client.get("/api/ollama/models")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "models": [{"name": "gemma3:4b"}, {"name": "llava:7b"}],
+                "default_model": "gemma3:4b",
+            },
+        )
+
+    def test_list_ollama_models_returns_503_when_unavailable(self) -> None:
+        with patch(
+            "backend.app.main.ollama_client.list_models", side_effect=OllamaUnavailableError("Ollama unavailable")
+        ):
+            response = self.client.get("/api/ollama/models")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"detail": "Ollama unavailable"})
 
     def test_get_image_file_returns_bytes(self) -> None:
         record = SimpleNamespace(path=self.image_path)
@@ -115,6 +140,9 @@ class VisionApiTests(unittest.TestCase):
             detections=detections,
             annotated_file_name="annotated.png",
             message=None,
+            trace=[TraceStep(title="Run Falcon inference", detail="Falcon produced 1 detection.", model="tiiuae/Falcon-Perception")],
+            reasoning="Falcon-only mode ran segmentation for 'dog' and returned 1 detection.",
+            final_output="Falcon detected 1 match(es) for 'dog'.",
             timings={"inference_seconds": 1.25},
         )
 
@@ -133,6 +161,7 @@ class VisionApiTests(unittest.TestCase):
                 "image_id": "img-1",
                 "object_query": "dog",
                 "annotation_mode": "combined",
+                "original_image_url": "/api/images/img-1/file",
                 "annotated_image_url": "/api/annotated/annotated.png",
                 "detections": [
                     {
@@ -143,6 +172,17 @@ class VisionApiTests(unittest.TestCase):
                         "count_index": 1,
                     }
                 ],
+                "execution_mode": "falcon",
+                "models_used": [{"name": "tiiuae/Falcon-Perception", "role": "Grounding and segmentation"}],
+                "trace": [
+                    {
+                        "title": "Run Falcon inference",
+                        "detail": "Falcon produced 1 detection.",
+                        "model": "tiiuae/Falcon-Perception",
+                    }
+                ],
+                "reasoning": "Falcon-only mode ran segmentation for 'dog' and returned 1 detection.",
+                "final_output": "Falcon detected 1 match(es) for 'dog'.",
                 "message": None,
                 "timings": {"inference_seconds": 1.25},
             },
@@ -187,8 +227,13 @@ class VisionApiTests(unittest.TestCase):
         fake_run = SimpleNamespace(
             answer="I found 1 dog in the image.",
             route="detect_count",
+            execution_mode="agent",
             annotated_file_name="annotated.png",
             detections=detections,
+            models_used=[ModelInfo(name="tiiuae/Falcon-Perception", role="Grounding and segmentation")],
+            trace=[TraceStep(title="Plan query", detail="Planner recognized a count question for 'dog'.", model=None)],
+            reasoning="The planner chose deterministic counting after Falcon grounding for 'dog'.",
+            final_output="I found 1 dog in the image.",
             message="done",
             timings={"inference_seconds": 0.9},
         )
@@ -209,6 +254,8 @@ class VisionApiTests(unittest.TestCase):
                 "query": "How many dogs are there?",
                 "answer": "I found 1 dog in the image.",
                 "route": "detect_count",
+                "execution_mode": "agent",
+                "original_image_url": "/api/images/img-1/file",
                 "annotated_image_url": "/api/annotated/annotated.png",
                 "detections": [
                     {
@@ -219,9 +266,99 @@ class VisionApiTests(unittest.TestCase):
                         "count_index": 1,
                     }
                 ],
+                "models_used": [{"name": "tiiuae/Falcon-Perception", "role": "Grounding and segmentation"}],
+                "trace": [
+                    {
+                        "title": "Plan query",
+                        "detail": "Planner recognized a count question for 'dog'.",
+                        "model": None,
+                    }
+                ],
+                "reasoning": "The planner chose deterministic counting after Falcon grounding for 'dog'.",
+                "final_output": "I found 1 dog in the image.",
                 "message": "done",
                 "timings": {"inference_seconds": 0.9},
             },
+        )
+
+    def test_chat_passes_execution_mode_and_object_query(self) -> None:
+        record = SimpleNamespace(path=self.image_path)
+        fake_run = SimpleNamespace(
+            answer="Grounded answer",
+            route="forced_detect_then_vlm",
+            execution_mode="agent",
+            annotated_file_name="annotated.png",
+            detections=[],
+            models_used=[ModelInfo(name="tiiuae/Falcon-Perception", role="Grounding and segmentation")],
+            trace=[],
+            reasoning="Combined mode forced grounding.",
+            final_output="Grounded answer",
+            message=None,
+            timings={"inference_seconds": 0.5},
+        )
+
+        with patch("backend.app.main.image_catalog.get_image", return_value=record), patch(
+            "backend.app.main.chat_orchestrator.answer", return_value=fake_run
+        ) as answer_mock:
+            response = self.client.post(
+                "/api/chat",
+                json={
+                    "image_id": "img-1",
+                    "query": "Where is the dog?",
+                    "annotation_mode": "combined",
+                    "execution_mode": "agent",
+                    "object_query": "dog",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        answer_mock.assert_called_once_with(
+            self.image_path,
+            "Where is the dog?",
+            "combined",
+            execution_mode="agent",
+            object_query="dog",
+            ollama_model=None,
+        )
+
+    def test_chat_passes_selected_ollama_model(self) -> None:
+        record = SimpleNamespace(path=self.image_path)
+        fake_run = SimpleNamespace(
+            answer="Direct answer",
+            route="gemma_only",
+            execution_mode="gemma",
+            annotated_file_name=None,
+            detections=[],
+            models_used=[ModelInfo(name="gemma3:12b", role="Visual reasoning and final answer generation")],
+            trace=[],
+            reasoning="Gemma-only mode.",
+            final_output="Direct answer",
+            message=None,
+            timings={"ollama_seconds": 0.5},
+        )
+
+        with patch("backend.app.main.image_catalog.get_image", return_value=record), patch(
+            "backend.app.main.chat_orchestrator.answer", return_value=fake_run
+        ) as answer_mock:
+            response = self.client.post(
+                "/api/chat",
+                json={
+                    "image_id": "img-1",
+                    "query": "Describe this image.",
+                    "annotation_mode": "combined",
+                    "execution_mode": "gemma",
+                    "ollama_model": "gemma3:12b",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        answer_mock.assert_called_once_with(
+            self.image_path,
+            "Describe this image.",
+            "combined",
+            execution_mode="gemma",
+            object_query=None,
+            ollama_model="gemma3:12b",
         )
 
     def test_chat_returns_503_when_ollama_unavailable(self) -> None:
