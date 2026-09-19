@@ -17,10 +17,24 @@ from falcon_perception.batch_inference import (
     process_batch_and_generate,
 )
 from PIL import Image
+
+
+def _load_local_env() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    env_path = project_root / ".env"
+    if not env_path.is_file():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 import torch
 
 
 def main() -> int:
+    _load_local_env()
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument("--query", default="dog")

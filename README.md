@@ -110,6 +110,27 @@ docker exec -it ollama ollama pull gemma3:4b
 
 You can replace `gemma3:4b` with any local 4B-class model tag available in your Ollama registry. The default `.env.example` value is `gemma3:4b`.
 
+### 3) Run the complete app with Docker Compose
+
+The repository includes a resource-bounded Compose stack for Ollama, the CUDA backend, and the static frontend. The backend and Ollama services each reserve one NVIDIA GPU; CPU and memory limits prevent idle services from consuming the whole host.
+
+```bash
+cp .env.example .env
+./scripts/composectl.sh build
+./scripts/composectl.sh start
+./scripts/composectl.sh pull-model
+```
+
+Open `http://127.0.0.1:5173`. Useful commands:
+
+```bash
+./scripts/composectl.sh status
+./scripts/composectl.sh logs backend
+./scripts/composectl.sh stop
+```
+
+Compose uses `http://ollama:11434` internally for the backend. Keep `OLLAMA_BASE_URL=http://localhost:11434` for host-run Python scripts; the Compose service overrides it only inside the backend container.
+
 ### 4) Validate the environment and smoke tests
 
 ```bash

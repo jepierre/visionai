@@ -25,3 +25,4 @@ npm-debug.log*
 output/
 artifacts/
 hf-cache/
+_archives
