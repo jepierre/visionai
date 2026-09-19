@@ -52,28 +52,38 @@ class FalconDetector:
         with Image.open(image_path) as source:
             image = source.convert("RGB")
 
-        batch = self._process_batch_and_generate(
-            tokenizer,
-            [(image, self._build_prompt_for_task(object_query, "segmentation"))],
-            max_length=getattr(model_args, "max_seq_len", None) or 4096,
-            min_dimension=256,
-            max_dimension=1024,
-            patch_size=getattr(model_args, "spatial_patch_size", 16),
-        )
-        batch = {key: value.to(model.device) if torch.is_tensor(value) else value for key, value in batch.items()}
-        stop_ids = [tokenizer.eos_token_id]
-        if getattr(tokenizer, "end_of_query_token_id", None) is not None:
-            stop_ids.append(tokenizer.end_of_query_token_id)
-
         started = perf_counter()
-        _, auxiliary = self._batch_inference_engine(model, tokenizer).generate(
-            **batch,
-            max_new_tokens=100,
-            temperature=0.0,
-            stop_token_ids=stop_ids,
-            seed=42,
-        )
-        detections = self._normalize_detections(auxiliary[0], object_query)
+        try:
+            batch = self._process_batch_and_generate(
+                tokenizer,
+                [(image, self._build_prompt_for_task(object_query, "segmentation"))],
+                max_length=getattr(model_args, "max_seq_len", None) or 4096,
+                min_dimension=256,
+                max_dimension=1024,
+                patch_size=getattr(model_args, "spatial_patch_size", 16),
+            )
+            batch = {key: value.to(model.device) if torch.is_tensor(value) else value for key, value in batch.items()}
+            stop_ids = [tokenizer.eos_token_id]
+            if getattr(tokenizer, "end_of_query_token_id", None) is not None:
+                stop_ids.append(tokenizer.end_of_query_token_id)
+
+            _, auxiliary = self._batch_inference_engine(model, tokenizer).generate(
+                **batch,
+                max_new_tokens=100,
+                temperature=0.0,
+                stop_token_ids=stop_ids,
+                seed=42,
+            )
+        except RuntimeError as exc:
+            if "out of memory" not in str(exc).lower():
+                raise
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            raise FalconUnavailableError(
+                "Falcon ran out of GPU memory. Stop other GPU processes or reduce GPU memory pressure, then retry."
+            ) from exc
+
+        detections = self._normalize_detections(auxiliary[0], object_query, image.size)
         annotated_file_name = self._renderer.render(image_path, detections, annotation_mode) if render else None
         message = None if detections else f"No detections found for {object_query!r}."
         trace.append(
@@ -148,14 +158,22 @@ class FalconDetector:
         os.environ.setdefault("VISIONAI_FALCON_LOAD_SECONDS", f"{perf_counter() - started:.3f}")
         return self._model, self._tokenizer, self._model_args, self._torch
 
-    def _normalize_detections(self, auxiliary: object, object_query: str) -> list[DetectedObject]:
-        bboxes = list(getattr(auxiliary, "bboxes_raw", []) or [])
+    def _normalize_detections(
+        self,
+        auxiliary: object,
+        object_query: str,
+        image_size: tuple[int, int] | None = None,
+    ) -> list[DetectedObject]:
+        raw_bboxes = list(getattr(auxiliary, "bboxes_raw", []) or [])
+        bboxes = self._pair_bbox_entries(raw_bboxes)
         masks = list(getattr(auxiliary, "masks_rle", []) or [])
         scores = list(getattr(auxiliary, "scores", []) or getattr(auxiliary, "scores_raw", []) or [])
-        total = max(len(bboxes), len(masks))
+        # Segmentation masks represent the instance results. Falcon can emit
+        # extra raw box candidates while finalizing a segmentation query.
+        total = len(masks) if masks else len(bboxes)
         detections: list[DetectedObject] = []
         for index in range(total):
-            bbox = self._normalize_bbox(bboxes[index]) if index < len(bboxes) else None
+            bbox = self._normalize_bbox(bboxes[index], image_size) if index < len(bboxes) else None
             mask_rle = self._normalize_mask(masks[index]) if index < len(masks) else None
             detections.append(
                 DetectedObject(
@@ -170,6 +188,19 @@ class FalconDetector:
         return detections
 
     @staticmethod
+    def _pair_bbox_entries(raw_bboxes: list[object]) -> list[dict]:
+        paired: list[dict] = []
+        current: dict = {}
+        for entry in raw_bboxes:
+            if not isinstance(entry, dict):
+                continue
+            current.update(entry)
+            if {"x", "y", "h", "w"}.issubset(current):
+                paired.append(dict(current))
+                current = {}
+        return paired
+
+    @staticmethod
     def _normalize_score(raw_score: object) -> float | None:
         try:
             return float(raw_score)
@@ -177,13 +208,24 @@ class FalconDetector:
             return None
 
     @staticmethod
-    def _normalize_bbox(raw_bbox: object) -> list[float] | None:
+    def _normalize_bbox(raw_bbox: object, image_size: tuple[int, int] | None = None) -> list[float] | None:
         values: list[float] | None = None
         if isinstance(raw_bbox, dict):
             if {"x1", "y1", "x2", "y2"}.issubset(raw_bbox):
                 values = [raw_bbox["x1"], raw_bbox["y1"], raw_bbox["x2"], raw_bbox["y2"]]
             elif {"x", "y", "w", "h"}.issubset(raw_bbox):
-                values = [raw_bbox["x"], raw_bbox["y"], raw_bbox["x"] + raw_bbox["w"], raw_bbox["y"] + raw_bbox["h"]]
+                x, y, width, height = [float(raw_bbox[key]) for key in ("x", "y", "w", "h")]
+                if image_size and max(abs(x), abs(y), abs(width), abs(height)) <= 1.0:
+                    image_width, image_height = image_size
+                    half_width = width * image_width / 2
+                    half_height = height * image_height / 2
+                    return [
+                        (x * image_width) - half_width,
+                        (y * image_height) - half_height,
+                        (x * image_width) + half_width,
+                        (y * image_height) + half_height,
+                    ]
+                values = [x, y, x + width, y + height]
         elif hasattr(raw_bbox, "tolist"):
             values = raw_bbox.tolist()
         elif isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) >= 4:

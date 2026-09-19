@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.main import app
 from backend.app.models.falcon import FalconUnavailableError
+from backend.app.models.falcon import FalconDetector
 from backend.app.models.ollama import OllamaUnavailableError
 from backend.app.rendering.annotations import DetectedObject
 from backend.app.schemas import ModelInfo, TraceStep
@@ -35,6 +36,25 @@ class VisionApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_falcon_segmentation_uses_masks_as_instance_count(self) -> None:
+        detector = FalconDetector.__new__(FalconDetector)
+        auxiliary = SimpleNamespace(
+            bboxes_raw=[
+                {"x": 0.25, "y": 0.25},
+                {"w": 0.2, "h": 0.3},
+                {"x": 0.75, "y": 0.75},
+                {"w": 0.4, "h": 0.5},
+            ],
+            masks_rle=[{"size": [2, 2], "counts": b"a"}, {"size": [2, 2], "counts": b"b"}],
+        )
+
+        with patch("backend.app.models.falcon.FalconDetector._mask_area", return_value=123):
+            detections = detector._normalize_detections(auxiliary, "dog", (100, 200))
+
+        self.assertEqual(len(detections), 2)
+        self.assertEqual([item.bbox for item in detections], [[15.0, 20.0, 35.0, 80.0], [55.0, 100.0, 95.0, 200.0]])
+        self.assertEqual([item.mask_area for item in detections], [123, 123])
 
     def test_list_images_returns_catalog(self) -> None:
         fake_images = [

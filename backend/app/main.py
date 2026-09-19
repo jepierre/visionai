@@ -101,6 +101,8 @@ def detect_objects(request: DetectRequest) -> DetectResponse:
         run = falcon_detector.detect(record.path, request.object_query, request.annotation_mode)
     except FalconUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Falcon request failed: {exc}") from exc
 
     detections = [
         DetectionRecord(
@@ -150,6 +152,8 @@ def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except OllamaUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Agent request failed: {exc}") from exc
 
     detections = [
         DetectionRecord(

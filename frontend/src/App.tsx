@@ -108,9 +108,18 @@ async function postJson<TResponse>(url: string, body: Record<string, unknown>): 
     },
     body: JSON.stringify(body),
   });
-  const payload = (await response.json()) as TResponse & ApiError;
+  const responseText = await response.text();
+  let payload: (TResponse & ApiError) | null = null;
+  try {
+    payload = responseText ? (JSON.parse(responseText) as TResponse & ApiError) : null;
+  } catch {
+    payload = null;
+  }
   if (!response.ok) {
-    throw new Error(payload.detail || 'Request failed.');
+    throw new Error(payload?.detail || responseText || `Request failed with status ${response.status}.`);
+  }
+  if (!payload) {
+    throw new Error('The server returned an empty or invalid JSON response.');
   }
   return payload;
 }
