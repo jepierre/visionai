@@ -312,6 +312,7 @@ class VisionApiTests(unittest.TestCase):
                 "final_output": "I found 1 dog in the image.",
                 "message": "done",
                 "timings": {"inference_seconds": 0.9},
+                "token_usage": None,
             },
         )
 

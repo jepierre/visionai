@@ -46,6 +46,13 @@ class ModelInfo(BaseModel):
     role: str
 
 
+class TokenUsage(BaseModel):
+    model: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
 class TraceStep(BaseModel):
     title: str
     detail: str
@@ -101,6 +108,7 @@ class ChatResponse(BaseModel):
     final_output: str | None = None
     message: str | None = None
     timings: dict[str, float] = Field(default_factory=dict)
+    token_usage: TokenUsage | None = None
 
 
 class WarmupResponse(BaseModel):

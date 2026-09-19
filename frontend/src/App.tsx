@@ -67,6 +67,7 @@ type ChatResponse = {
   final_output: string | null;
   message: string | null;
   timings: Record<string, number>;
+  token_usage: TokenUsage | null;
 };
 
 type CatalogResponse = {
@@ -86,6 +87,13 @@ type ApiError = {
   detail?: string;
 };
 
+type TokenUsage = {
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
 type RunResult = {
   executionMode: ExecutionMode;
   routeLabel: string;
@@ -98,6 +106,7 @@ type RunResult = {
   detections: DetectionRecord[];
   timings: Record<string, number>;
   message: string | null;
+  tokenUsage: TokenUsage | null;
 };
 
 async function postJson<TResponse>(url: string, body: Record<string, unknown>): Promise<TResponse> {
@@ -143,6 +152,12 @@ function App() {
   const [runStatus, setRunStatus] = useState('Loading image catalog...');
   const [runError, setRunError] = useState('');
   const [isRunning, setIsRunning] = useState(false);
+  const [sessionTokenUsage, setSessionTokenUsage] = useState<TokenUsage>({
+    model: '',
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+  });
 
   useEffect(() => {
     let isActive = true;
@@ -266,6 +281,7 @@ function App() {
           detections: payload.detections,
           timings: payload.timings,
           message: payload.message,
+          tokenUsage: null,
         });
         setRunStatus(payload.message || payload.final_output || `Detected ${payload.detections.length} match(es).`);
       } else {
@@ -288,7 +304,16 @@ function App() {
           detections: payload.detections,
           timings: payload.timings,
           message: payload.message,
+          tokenUsage: payload.token_usage,
         });
+        if (payload.token_usage) {
+          setSessionTokenUsage((current) => ({
+            model: current.model && current.model !== payload.token_usage!.model ? 'Multiple models' : payload.token_usage!.model,
+            prompt_tokens: current.prompt_tokens + payload.token_usage!.prompt_tokens,
+            completion_tokens: current.completion_tokens + payload.token_usage!.completion_tokens,
+            total_tokens: current.total_tokens + payload.token_usage!.total_tokens,
+          }));
+        }
         setRunStatus(payload.message || payload.final_output || `Completed via ${payload.route}.`);
       }
     } catch (error) {
@@ -552,6 +577,30 @@ function App() {
             ) : (
               <p className="text-slate-300/70">Run a workflow to see which models were invoked.</p>
             )}
+          </article>
+
+          <article className="rounded-[20px] border border-vision-aqua/20 bg-vision-aqua/[0.06] p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-base font-semibold">LLM token usage this session</h3>
+              <span className="pill border-vision-aqua/30 bg-vision-aqua/15 text-[#e7f3ff]">
+                {sessionTokenUsage.model || 'No Gemma calls'}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-2 py-3">
+                <p className="text-lg font-semibold">{sessionTokenUsage.prompt_tokens.toLocaleString()}</p>
+                <p className="text-xs text-slate-300/70">Prompt</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-2 py-3">
+                <p className="text-lg font-semibold">{sessionTokenUsage.completion_tokens.toLocaleString()}</p>
+                <p className="text-xs text-slate-300/70">Completion</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-2 py-3">
+                <p className="text-lg font-semibold">{sessionTokenUsage.total_tokens.toLocaleString()}</p>
+                <p className="text-xs text-slate-300/70">Total</p>
+              </div>
+            </div>
+            <p className="mt-3 text-xs text-slate-300/60">Falcon-only runs do not consume LLM tokens.</p>
           </article>
 
           <article className="rounded-[20px] border border-white/10 bg-white/[0.03] p-4">

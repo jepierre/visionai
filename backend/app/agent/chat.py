@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -24,6 +24,7 @@ class ChatRun:
     final_output: str
     timings: dict[str, float]
     message: str | None = None
+    token_usage: dict[str, int | str] = field(default_factory=dict)
 
 
 @dataclass
@@ -76,6 +77,7 @@ class ChatOrchestrator:
                 reasoning="The planner decided Falcon grounding was unnecessary, so the request went directly to Gemma.",
                 final_output=result.answer,
                 timings={"ollama_seconds": result.duration_seconds},
+                token_usage=self._token_usage(result),
             )
 
         if plan.route == "compare_counts":
@@ -143,6 +145,7 @@ class ChatOrchestrator:
             final_output=answer,
             timings=timings,
             message=message,
+            token_usage=self._token_usage(ollama_result) if "ollama_result" in locals() else {},
         )
 
     def _answer_with_gemma(self, image_path: Path, query: str, ollama_model: str | None = None) -> ChatRun:
@@ -161,6 +164,7 @@ class ChatOrchestrator:
             reasoning="Gemma-only mode bypassed Falcon and answered directly from the image.",
             final_output=result.answer,
             timings={"ollama_seconds": result.duration_seconds},
+            token_usage=self._token_usage(result),
         )
 
     def _answer_with_forced_grounding(
@@ -209,6 +213,7 @@ class ChatOrchestrator:
             final_output=answer,
             timings=timings,
             message=message,
+            token_usage=self._token_usage(ollama_result) if "ollama_result" in locals() else {},
         )
 
     def _answer_with_crop(
@@ -266,6 +271,7 @@ class ChatOrchestrator:
             final_output=result.answer,
             timings={**detection.timings, "ollama_seconds": result.duration_seconds},
             message=detection.message,
+            token_usage=self._token_usage(result),
         )
 
     @staticmethod
@@ -273,6 +279,15 @@ class ChatOrchestrator:
         if not bbox:
             return 0.0
         return max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+
+    @staticmethod
+    def _token_usage(result: object) -> dict[str, int | str]:
+        return {
+            "model": str(result.model),
+            "prompt_tokens": int(result.prompt_tokens),
+            "completion_tokens": int(result.completion_tokens),
+            "total_tokens": int(result.total_tokens),
+        }
 
     def _compare_counts(self, image_path: Path, query: str, object_queries: list[str], annotation_mode: str) -> ChatRun:
         runs: list[DetectionRun] = [

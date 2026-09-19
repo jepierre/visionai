@@ -21,6 +21,12 @@ class OllamaResult:
     answer: str
     model: str
     duration_seconds: float
+    prompt_tokens: int
+    completion_tokens: int
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
 
 class OllamaVisionClient:
@@ -62,6 +68,8 @@ class OllamaVisionClient:
             answer=answer,
             model=str(response_payload.get("model", resolved_model)),
             duration_seconds=perf_counter() - started,
+            prompt_tokens=int(response_payload.get("prompt_eval_count") or 0),
+            completion_tokens=int(response_payload.get("eval_count") or 0),
         )
 
     def list_models(self) -> list[str]:

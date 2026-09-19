@@ -20,6 +20,7 @@ from backend.app.schemas import (
     ImageCatalogResponse,
     OllamaModelListResponse,
     OllamaModelSummary,
+    TokenUsage,
     WarmupResponse,
 )
 from backend.app.services.images import ImageCatalogService
@@ -198,4 +199,5 @@ def chat(request: ChatRequest) -> ChatResponse:
         final_output=run.final_output,
         message=run.message,
         timings=run.timings,
+        token_usage=TokenUsage(**run.token_usage) if getattr(run, "token_usage", None) else None,
     )

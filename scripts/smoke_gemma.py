@@ -20,6 +20,19 @@ from pathlib import Path
 from PIL import Image
 
 
+def _load_local_env() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    env_path = project_root / ".env"
+    if not env_path.is_file():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
 def _call_ollama(model: str, prompt: str, image_path: Path, base_url: str) -> tuple[str, float, str]:
     image_bytes = image_path.read_bytes()
     payload = {
@@ -40,6 +53,15 @@ def _call_ollama(model: str, prompt: str, image_path: Path, base_url: str) -> tu
     try:
         with urllib.request.urlopen(request, timeout=180) as response:
             payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", errors="replace").strip()
+        except OSError:
+            detail = ""
+        raise SystemExit(
+            f"Ollama rejected model {model!r} at {endpoint} with HTTP {exc.code}."
+            + (f" Response: {detail}" if detail else "")
+        ) from exc
     except urllib.error.URLError as exc:
         raise SystemExit(
             f"Ollama is not reachable at {endpoint}. Start `ollama serve`, pull a local model, and retry.\n{exc}"
@@ -53,12 +75,13 @@ def _call_ollama(model: str, prompt: str, image_path: Path, base_url: str) -> tu
 
 
 def main() -> int:
+    _load_local_env()
     parser = argparse.ArgumentParser(description="Run a local Gemma 4B smoke test via Ollama.")
     parser.add_argument("--image", type=Path, required=True, help="Path to the input image.")
     parser.add_argument("--prompt", default="Describe this image in one sentence.", help="Text question or instruction to send with the image.")
     parser.add_argument(
         "--model",
-        default=os.getenv("OLLAMA_MODEL", "gemma3:4b"),
+        default=os.getenv("OLLAMA_MODEL", "gemma4:latest"),
         help="Local Ollama model tag to use. Typical 4B examples: gemma3:4b or a custom local tag.",
     )
     parser.add_argument(
@@ -72,7 +95,7 @@ def main() -> int:
         raise SystemExit(f"Image does not exist: {args.image}")
 
     with Image.open(args.image) as image:
-        image.convert("RGB")
+        image = image.convert("RGB")
 
     answer, inference_seconds, model_name = _call_ollama(args.model, args.prompt, args.image, args.ollama_url)
     print(f"Ollama model: {model_name}")
