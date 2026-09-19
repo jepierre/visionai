@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from backend.app.models.falcon import DetectionRun, FalconDetector
 from backend.app.models.ollama import OllamaUnavailableError, OllamaVisionClient
@@ -29,9 +30,11 @@ class ChatRun:
 class QueryPlan:
     route: str
     object_queries: list[str]
+    actions: list[str]
 
 
 class ChatOrchestrator:
+    MAX_ACTIONS = 6
     def __init__(self, detector: FalconDetector, ollama: OllamaVisionClient, renderer: AnnotationRenderer):
         self._detector = detector
         self._ollama = ollama
@@ -53,6 +56,10 @@ class ChatOrchestrator:
             return self._answer_with_forced_grounding(image_path, query, object_query, annotation_mode, ollama_model)
 
         plan = self._plan(query)
+        if len(plan.actions) > self.MAX_ACTIONS:
+            raise ValueError(f"Agent plan exceeds the maximum of {self.MAX_ACTIONS} actions.")
+        if plan.route == "crop":
+            return self._answer_with_crop(image_path, query, plan.object_queries[0], annotation_mode, ollama_model, plan.actions)
         if plan.route == "vlm":
             result = self._ollama.generate(query, image_path, model=ollama_model)
             return ChatRun(
@@ -63,8 +70,8 @@ class ChatOrchestrator:
                 detections=[],
                 models_used=[ModelInfo(name=result.model, role="Visual reasoning and final answer generation")],
                 trace=[
-                    TraceStep(title="Plan query", detail="Planner classified the question as direct visual reasoning.", model=None),
-                    TraceStep(title="Run Gemma", detail="Sent the image and original question to Ollama.", model=result.model),
+                    TraceStep(title="Plan query", detail="Planner classified the question as direct visual reasoning.", model=None, action="VLM"),
+                    TraceStep(title="Run Gemma", detail="Sent the image and original question to Ollama.", model=result.model, action="ANSWER"),
                 ],
                 reasoning="The planner decided Falcon grounding was unnecessary, so the request went directly to Gemma.",
                 final_output=result.answer,
@@ -87,9 +94,9 @@ class ChatOrchestrator:
                 detections=detection.detections,
                 models_used=[self._detector.model_info()],
                 trace=[
-                    TraceStep(title="Plan query", detail=f"Planner recognized a count question for {target!r}.", model=None),
+                    TraceStep(title="Plan query", detail=f"Planner recognized a count question for {target!r}.", model=None, action="DETECT"),
                     *detection.trace,
-                    TraceStep(title="Return deterministic answer", detail=f"Counted {count} grounded detection(s) without invoking Gemma.", model=None),
+                    TraceStep(title="Return deterministic answer", detail=f"Counted {count} grounded detection(s) without invoking Gemma.", model=None, action="ANSWER"),
                 ],
                 reasoning=f"The planner chose deterministic counting after Falcon grounding for {target!r}.",
                 final_output=f"I found {count} {noun} in the image.",
@@ -105,10 +112,10 @@ class ChatOrchestrator:
             message = detection.message
             models_used = [self._detector.model_info(), ModelInfo(name=ollama_result.model, role="Visual reasoning and final answer generation")]
             trace = [
-                TraceStep(title="Plan query", detail=f"Planner selected grounded reasoning for {detection.object_query!r}.", model=None),
+                TraceStep(title="Plan query", detail=f"Planner selected grounded reasoning for {detection.object_query!r}.", model=None, action="DETECT"),
                 *detection.trace,
-                TraceStep(title="Build grounded prompt", detail="Converted Falcon detections into a compact grounding summary for Gemma.", model=None),
-                TraceStep(title="Run Gemma", detail="Sent the original image and grounded summary to Ollama.", model=ollama_result.model),
+                TraceStep(title="Build grounded prompt", detail="Converted Falcon detections into a compact grounding summary for Gemma.", model=None, action="VLM"),
+                TraceStep(title="Run Gemma", detail="Sent the original image and grounded summary to Ollama.", model=ollama_result.model, action="VLM"),
             ]
             reasoning = (
                 f"The planner used Falcon to ground {detection.object_query!r}, then passed the detection summary to Gemma for the final answer."
@@ -119,9 +126,9 @@ class ChatOrchestrator:
             message = "Falcon completed, but Ollama is unavailable."
             models_used = [self._detector.model_info()]
             trace = [
-                TraceStep(title="Plan query", detail=f"Planner selected grounded reasoning for {detection.object_query!r}.", model=None),
+                TraceStep(title="Plan query", detail=f"Planner selected grounded reasoning for {detection.object_query!r}.", model=None, action="DETECT"),
                 *detection.trace,
-                TraceStep(title="Run Gemma", detail="Gemma was unavailable, so the workflow returned the grounded Falcon summary only.", model=self._ollama.model_info().name),
+                TraceStep(title="Run Gemma", detail="Gemma was unavailable, so the workflow returned the grounded Falcon summary only.", model=self._ollama.model_info().name, action="VLM"),
             ]
             reasoning = "Falcon completed grounding, but Gemma was unavailable, so the response fell back to the grounded detection summary."
         return ChatRun(
@@ -204,6 +211,69 @@ class ChatOrchestrator:
             message=message,
         )
 
+    def _answer_with_crop(
+        self,
+        image_path: Path,
+        query: str,
+        object_query: str,
+        annotation_mode: str,
+        ollama_model: str | None,
+        actions: list[str],
+    ) -> ChatRun:
+        detection = self._detector.detect(image_path, object_query, annotation_mode)
+        largest = max(detection.detections, key=lambda item: item.mask_area or self._bbox_area(item.bbox), default=None)
+        if largest is None or not largest.bbox:
+            return ChatRun(
+                answer=f"I could not find a grounded {object_query} to inspect.",
+                route="crop_then_vlm",
+                execution_mode="agent",
+                annotated_file_name=detection.annotated_file_name,
+                detections=detection.detections,
+                models_used=[self._detector.model_info()],
+                trace=[*detection.trace, TraceStep(title="Crop target", detail=f"No usable {object_query} bounding box was found.", model=None, action="CROP"), TraceStep(title="Return answer", detail="Returned the grounded limitation.", model=None, action="ANSWER")],
+                reasoning=f"The planner selected the largest {object_query}, but Falcon returned no usable bounding box.",
+                final_output=f"I could not find a grounded {object_query} to inspect.",
+                timings=detection.timings,
+                message="No usable bounding box was returned by Falcon.",
+            )
+
+        with Image.open(image_path) as source:
+            image = source.convert("RGB")
+            x1, y1, x2, y2 = [int(max(0, value)) for value in largest.bbox]
+            x2 = min(image.width, max(x1 + 1, x2))
+            y2 = min(image.height, max(y1 + 1, y2))
+            crop = image.crop((x1, y1, x2, y2))
+            with NamedTemporaryFile(suffix=".png") as temporary:
+                crop.save(temporary.name, format="PNG")
+                result = self._ollama.generate(query, Path(temporary.name), model=ollama_model)
+
+        trace = [
+            TraceStep(title="Plan query", detail=f"Planner selected crop-based detail analysis for {object_query!r}.", model=None, action="DETECT"),
+            *detection.trace,
+            TraceStep(title="Crop target", detail=f"Cropped the largest grounded {object_query} at ({x1}, {y1}, {x2}, {y2}).", model=None, action="CROP"),
+            TraceStep(title="Run Gemma", detail="Sent the cropped object to Ollama for detail analysis.", model=result.model, action="VLM"),
+            TraceStep(title="Return answer", detail="Returned the crop-grounded visual answer.", model=None, action="ANSWER"),
+        ]
+        return ChatRun(
+            answer=result.answer,
+            route="crop_then_vlm",
+            execution_mode="agent",
+            annotated_file_name=detection.annotated_file_name,
+            detections=detection.detections,
+            models_used=[self._detector.model_info(), ModelInfo(name=result.model, role="Cropped visual detail reasoning")],
+            trace=trace,
+            reasoning=f"The planner grounded {object_query!r}, selected the largest detection, cropped it, and sent the crop to Gemma.",
+            final_output=result.answer,
+            timings={**detection.timings, "ollama_seconds": result.duration_seconds},
+            message=detection.message,
+        )
+
+    @staticmethod
+    def _bbox_area(bbox: list[float] | None) -> float:
+        if not bbox:
+            return 0.0
+        return max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+
     def _compare_counts(self, image_path: Path, query: str, object_queries: list[str], annotation_mode: str) -> ChatRun:
         runs: list[DetectionRun] = [
             self._detector.detect(image_path, object_query, annotation_mode, render=False) for object_query in object_queries
@@ -230,11 +300,11 @@ class ChatOrchestrator:
             detections=all_detections,
             models_used=[self._detector.model_info()],
             trace=[
-                TraceStep(title="Plan query", detail=f"Planner recognized a comparison between {first!r} and {second!r}.", model=None),
+                TraceStep(title="Plan query", detail=f"Planner recognized a comparison between {first!r} and {second!r}.", model=None, action="DETECT_EACH"),
                 *self._prefixed_trace(first, runs[0].trace),
                 *self._prefixed_trace(second, runs[1].trace),
-                TraceStep(title="Render merged overlay", detail="Merged both Falcon runs into one annotated image.", model=None),
-                TraceStep(title="Return deterministic comparison", detail="Compared grounded counts without invoking Gemma.", model=None),
+                TraceStep(title="Render merged overlay", detail="Merged both Falcon runs into one annotated image.", model=None, action="COMPARE"),
+                TraceStep(title="Return deterministic comparison", detail="Compared grounded counts without invoking Gemma.", model=None, action="ANSWER"),
             ],
             reasoning=f"The planner ran Falcon separately for {first!r} and {second!r}, then compared the grounded counts deterministically.",
             final_output=answer,
@@ -244,7 +314,7 @@ class ChatOrchestrator:
 
     @staticmethod
     def _prefixed_trace(label: str, trace: list[TraceStep]) -> list[TraceStep]:
-        return [TraceStep(title=f"{step.title} [{label}]", detail=step.detail, model=step.model) for step in trace]
+        return [TraceStep(title=f"{step.title} [{label}]", detail=step.detail, model=step.model, action=step.action) for step in trace]
 
     def _grounded_prompt(self, query: str, detection: DetectionRun) -> str:
         lines = [
@@ -291,22 +361,26 @@ class ChatOrchestrator:
 
     def _plan(self, query: str) -> QueryPlan:
         lowered = query.lower().strip()
+        crop_match = re.search(r"(?:color|colour|detail|what does).*(?:largest|biggest)\s+([a-z0-9\- ]+)", lowered)
+        if crop_match:
+            target = self._clean_object(crop_match.group(1))
+            return QueryPlan("crop", [target], ["DETECT", "CROP", "VLM", "ANSWER"])
         compare = re.search(r"more\s+([a-z0-9\- ]+?)\s+than\s+([a-z0-9\- ]+)", lowered)
         if compare:
-            return QueryPlan("compare_counts", [self._clean_object(compare.group(1)), self._clean_object(compare.group(2))])
+            return QueryPlan("compare_counts", [self._clean_object(compare.group(1)), self._clean_object(compare.group(2))], ["DETECT_EACH", "COMPARE", "ANSWER"])
 
         count_match = re.search(r"how many\s+([a-z0-9\- ]+?)(?:\s+(?:are|is|do|can)\b|\?|$)", lowered)
         if count_match:
-            return QueryPlan("count", [self._clean_object(count_match.group(1))])
+            return QueryPlan("count", [self._clean_object(count_match.group(1))], ["DETECT", "ANSWER"])
 
         detect_match = re.search(
             r"(?:show|find|detect|locate|where\s+(?:is|are)|highlight)\s+(?:all\s+)?([a-z0-9\- ]+?)(?:\?|$)",
             lowered,
         )
         if detect_match:
-            return QueryPlan("detect_then_vlm", [self._clean_object(detect_match.group(1))])
+            return QueryPlan("detect_then_vlm", [self._clean_object(detect_match.group(1))], ["DETECT", "VLM", "ANSWER"])
 
-        return QueryPlan("vlm", [])
+        return QueryPlan("vlm", [], ["VLM", "ANSWER"])
 
     @staticmethod
     def _clean_object(value: str) -> str:

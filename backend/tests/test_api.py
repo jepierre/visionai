@@ -37,6 +37,18 @@ class VisionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
 
+    def test_warmup_reports_ready_models(self) -> None:
+        with patch("backend.app.main.falcon_detector.warmup"), patch(
+            "backend.app.main.ollama_client.list_models", return_value=["gemma4:latest"]
+        ):
+            response = self.client.post("/api/warmup")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"falcon_ready": True, "ollama_ready": True, "message": "Models are ready."},
+        )
+
     def test_falcon_segmentation_uses_masks_as_instance_count(self) -> None:
         detector = FalconDetector.__new__(FalconDetector)
         auxiliary = SimpleNamespace(
@@ -160,7 +172,7 @@ class VisionApiTests(unittest.TestCase):
             detections=detections,
             annotated_file_name="annotated.png",
             message=None,
-            trace=[TraceStep(title="Run Falcon inference", detail="Falcon produced 1 detection.", model="tiiuae/Falcon-Perception")],
+            trace=[TraceStep(title="Run Falcon inference", detail="Falcon produced 1 detection.", model="tiiuae/Falcon-Perception", action="DETECT")],
             reasoning="Falcon-only mode ran segmentation for 'dog' and returned 1 detection.",
             final_output="Falcon detected 1 match(es) for 'dog'.",
             timings={"inference_seconds": 1.25},
@@ -199,6 +211,7 @@ class VisionApiTests(unittest.TestCase):
                         "title": "Run Falcon inference",
                         "detail": "Falcon produced 1 detection.",
                         "model": "tiiuae/Falcon-Perception",
+                        "action": "DETECT",
                     }
                 ],
                 "reasoning": "Falcon-only mode ran segmentation for 'dog' and returned 1 detection.",
@@ -251,7 +264,7 @@ class VisionApiTests(unittest.TestCase):
             annotated_file_name="annotated.png",
             detections=detections,
             models_used=[ModelInfo(name="tiiuae/Falcon-Perception", role="Grounding and segmentation")],
-            trace=[TraceStep(title="Plan query", detail="Planner recognized a count question for 'dog'.", model=None)],
+            trace=[TraceStep(title="Plan query", detail="Planner recognized a count question for 'dog'.", model=None, action="DETECT")],
             reasoning="The planner chose deterministic counting after Falcon grounding for 'dog'.",
             final_output="I found 1 dog in the image.",
             message="done",
@@ -292,6 +305,7 @@ class VisionApiTests(unittest.TestCase):
                         "title": "Plan query",
                         "detail": "Planner recognized a count question for 'dog'.",
                         "model": None,
+                        "action": "DETECT",
                     }
                 ],
                 "reasoning": "The planner chose deterministic counting after Falcon grounding for 'dog'.",

@@ -1,7 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 
 const DEFAULT_QUESTION = 'How many dogs are in this image?';
-const DEFAULT_OBJECT_QUERY = 'dog';
 const MODES = ['mask', 'box', 'combined'] as const;
 const EXECUTION_MODES = ['falcon', 'gemma', 'agent'] as const;
 
@@ -34,6 +33,7 @@ type TraceStep = {
   title: string;
   detail: string;
   model: string | null;
+  action?: string | null;
 };
 
 type DetectResponse = {
@@ -138,7 +138,6 @@ function App() {
   const [selectedImageId, setSelectedImageId] = useState('');
   const [annotationMode, setAnnotationMode] = useState<AnnotationMode>('combined');
   const [executionMode, setExecutionMode] = useState<ExecutionMode>('agent');
-  const [objectQuery, setObjectQuery] = useState(DEFAULT_OBJECT_QUERY);
   const [question, setQuestion] = useState(DEFAULT_QUESTION);
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [runStatus, setRunStatus] = useState('Loading image catalog...');
@@ -242,7 +241,7 @@ function App() {
     setRunError('');
     setRunStatus(
       executionMode === 'falcon'
-        ? `Running Falcon for ${objectQuery}...`
+        ? `Running Falcon for ${question}...`
         : executionMode === 'gemma'
           ? 'Running Gemma-only reasoning...'
           : 'Running combined Falcon + Gemma workflow...'
@@ -252,7 +251,7 @@ function App() {
       if (executionMode === 'falcon') {
         const payload = await postJson<DetectResponse>('/api/detect', {
           image_id: selectedImageId,
-          object_query: objectQuery,
+          object_query: question.trim(),
           annotation_mode: annotationMode,
         });
         setRunResult({
@@ -275,7 +274,6 @@ function App() {
           query: question,
           annotation_mode: annotationMode,
           execution_mode: executionMode,
-          object_query: executionMode === 'agent' && objectQuery.trim() ? objectQuery.trim() : null,
           ollama_model: selectedOllamaModel || null,
         });
         setRunResult({
@@ -308,6 +306,15 @@ function App() {
     setRunStatus('Ready.');
   }
 
+  function handleExecutionModeChange(nextMode: ExecutionMode) {
+    setExecutionMode(nextMode);
+    if (nextMode === 'falcon' && question === DEFAULT_QUESTION) {
+      setQuestion('dog');
+    } else if (nextMode !== 'falcon' && question === 'dog') {
+      setQuestion(DEFAULT_QUESTION);
+    }
+  }
+
   function renderImagePane(title: string, subtitle: string, imageUrl: string | null, fallback: string) {
     return (
       <article className="rounded-[20px] border border-white/10 bg-white/[0.03] p-4">
@@ -324,6 +331,19 @@ function App() {
         </div>
       </article>
     );
+  }
+
+  function downloadSummary() {
+    if (!runResult) {
+      return;
+    }
+    const blob = new Blob([JSON.stringify(runResult, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `visionai-${selectedImage?.name || 'run'}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -420,7 +440,7 @@ function App() {
                         ? 'border-vision-gold/45 bg-vision-gold/15 text-slate-50'
                         : 'border-white/12 bg-white/[0.02] text-slate-100',
                     ].join(' ')}
-                    onClick={() => setExecutionMode(mode)}
+                    onClick={() => handleExecutionModeChange(mode)}
                   >
                     {mode === 'agent' ? 'Gemma + Falcon' : `${mode} only`}
                   </button>
@@ -428,29 +448,22 @@ function App() {
               </div>
             </div>
 
-            <label className="flex flex-col gap-2">
-              <span className="font-semibold text-[#f6ead4]">Grounding object for Falcon</span>
-              <input
-                type="text"
-                value={objectQuery}
-                onChange={(event) => setObjectQuery(event.target.value)}
-                placeholder="dog"
-                className="w-full rounded-xl border border-white/12 bg-[rgba(5,13,20,0.84)] px-3.5 py-3 text-slate-100 outline-none placeholder:text-slate-400"
-              />
-              <span className="text-xs text-slate-300/60">
-                Required for Falcon-only. Optional in combined mode to force Falcon grounding before Gemma reasoning.
-              </span>
-            </label>
-
             <label className="flex flex-col gap-2 lg:col-span-2">
-              <span className="font-semibold text-[#f6ead4]">Question for Gemma or combined mode</span>
+              <span className="font-semibold text-[#f6ead4]">
+                {executionMode === 'falcon' ? 'Object to detect' : 'Question for the selected workflow'}
+              </span>
               <textarea
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
                 rows={3}
-                placeholder="Ask a question about the selected image..."
+                placeholder={executionMode === 'falcon' ? 'dog' : 'Ask a question about the selected image...'}
                 className="min-h-[110px] w-full resize-y rounded-xl border border-white/12 bg-[rgba(5,13,20,0.84)] px-3.5 py-3 text-slate-100 outline-none placeholder:text-slate-400"
               />
+              <span className="text-xs text-slate-300/60">
+                {executionMode === 'falcon'
+                  ? 'Falcon-only mode treats this prompt as the object query.'
+                  : 'Combined mode lets the planner decide whether Falcon is needed.'}
+              </span>
             </label>
 
             <label className="flex flex-col gap-2 lg:col-span-2">
@@ -484,7 +497,7 @@ function App() {
               <button
                 type="submit"
                 className="rounded-xl bg-gradient-to-br from-vision-gold to-vision-coral px-4 py-3 font-bold text-vision-ink transition hover:-translate-y-[1px] hover:shadow-[0_12px_22px_rgba(255,146,84,0.26)] disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0 disabled:hover:shadow-none"
-                disabled={!canRun || isRunning || (executionMode === 'falcon' && !objectQuery.trim()) || ((executionMode === 'gemma' || executionMode === 'agent') && !question.trim())}
+                disabled={!canRun || isRunning || !question.trim()}
               >
                 {isRunning ? 'Running...' : 'Run workflow'}
               </button>
@@ -498,6 +511,24 @@ function App() {
               runResult?.annotatedImageUrl || null,
               'No Falcon overlay is available for this run yet.'
             )}
+            {runResult?.annotatedImageUrl ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <a
+                  href={runResult.annotatedImageUrl}
+                  download
+                  className="rounded-xl border border-vision-aqua/30 bg-vision-aqua/15 px-3 py-2 text-sm text-[#e7f3ff]"
+                >
+                  Download annotated image
+                </a>
+                <button
+                  type="button"
+                  onClick={downloadSummary}
+                  className="rounded-xl border border-vision-gold/35 bg-vision-gold/10 px-3 py-2 text-sm text-[#fff1dc]"
+                >
+                  Download run summary
+                </button>
+              </div>
+            ) : null}
           </div>
         </section>
 
@@ -532,6 +563,7 @@ function App() {
                     <div className="rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2.5">
                       <p className="font-medium text-slate-50">{step.title}</p>
                       <p className="text-sm text-slate-300/75">{step.detail}</p>
+                      {step.action ? <p className="mt-1 text-xs uppercase tracking-[0.08em] text-vision-aqua/90">Action: {step.action}</p> : null}
                       {step.model ? <p className="mt-1 text-xs uppercase tracking-[0.08em] text-vision-gold/90">{step.model}</p> : null}
                     </div>
                   </li>

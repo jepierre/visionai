@@ -20,6 +20,7 @@ from backend.app.schemas import (
     ImageCatalogResponse,
     OllamaModelListResponse,
     OllamaModelSummary,
+    WarmupResponse,
 )
 from backend.app.services.images import ImageCatalogService
 
@@ -60,6 +61,22 @@ def list_ollama_models() -> OllamaModelListResponse:
         models=[OllamaModelSummary(name=name) for name in models],
         default_model=ollama_client.default_model,
     )
+
+
+@app.post("/api/warmup", response_model=WarmupResponse)
+def warmup_models() -> WarmupResponse:
+    try:
+        falcon_detector.warmup()
+        falcon_ready = True
+    except FalconUnavailableError as exc:
+        return WarmupResponse(falcon_ready=False, ollama_ready=False, message=str(exc))
+
+    try:
+        ollama_client.list_models()
+        ollama_ready = True
+    except OllamaUnavailableError as exc:
+        return WarmupResponse(falcon_ready=falcon_ready, ollama_ready=False, message=str(exc))
+    return WarmupResponse(falcon_ready=falcon_ready, ollama_ready=ollama_ready, message="Models are ready.")
 
 
 @app.get("/api/images/{image_id}/file")

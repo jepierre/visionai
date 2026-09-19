@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -40,13 +41,32 @@ class FalconDetector:
         self._batch_inference_engine = None
         self._build_prompt_for_task = None
         self._process_batch_and_generate = None
+        self._cache: dict[tuple[str, str, str], DetectionRun] = {}
+        self._inference_lock = threading.RLock()
 
     def detect(self, image_path: Path, object_query: str, annotation_mode: str, render: bool = True) -> DetectionRun:
+        cache_key = (self._fingerprint(image_path), object_query.strip().lower(), annotation_mode)
+        cached = self._cache.get(cache_key)
+        if cached is not None and (not render or cached.annotated_file_name):
+            return cached
+
+        with self._inference_lock:
+            cached = self._cache.get(cache_key)
+            if cached is not None and (not render or cached.annotated_file_name):
+                return cached
+            result = self._detect_uncached(image_path, object_query, annotation_mode, render)
+            self._cache[cache_key] = result
+            return result
+
+    def warmup(self) -> None:
+        self._ensure_model()
+
+    def _detect_uncached(self, image_path: Path, object_query: str, annotation_mode: str, render: bool) -> DetectionRun:
         model, tokenizer, model_args, torch = self._ensure_model()
 
         trace = [
-            TraceStep(title="Load Falcon context", detail=f"Prepare Falcon for query {object_query!r}.", model=self._settings.falcon_model_id),
-            TraceStep(title="Open image", detail=f"Load source image {image_path.name}.", model=None),
+            TraceStep(title="Load Falcon context", detail=f"Prepare Falcon for query {object_query!r}.", model=self._settings.falcon_model_id, action="DETECT"),
+            TraceStep(title="Open image", detail=f"Load source image {image_path.name}.", model=None, action="DETECT"),
         ]
 
         with Image.open(image_path) as source:
@@ -91,6 +111,7 @@ class FalconDetector:
                 title="Run Falcon inference",
                 detail=f"Falcon produced {len(detections)} detection(s) for {object_query!r}.",
                 model=self._settings.falcon_model_id,
+                action="DETECT",
             )
         )
         if render:
@@ -103,6 +124,7 @@ class FalconDetector:
                         else "No overlay generated because there were no detections."
                     ),
                     model=None,
+                    action="DETECT",
                 )
             )
         final_output = f"Falcon detected {len(detections)} match(es) for {object_query!r}."
@@ -117,6 +139,11 @@ class FalconDetector:
             final_output=final_output,
             timings={"inference_seconds": perf_counter() - started},
         )
+
+    @staticmethod
+    def _fingerprint(image_path: Path) -> str:
+        stat = image_path.stat()
+        return f"{image_path.resolve()}:{stat.st_mtime_ns}:{stat.st_size}"
 
     def model_info(self) -> ModelInfo:
         return ModelInfo(name=self._settings.falcon_model_id, role="Grounding and segmentation")

@@ -1,6 +1,6 @@
 # VisionAI Agentic Workflow
 
-This document describes the current Phase 1-3 application flow: what runs in the frontend, what runs in the backend, the API boundaries, and the query-routing loop inside the backend orchestrator.
+This document describes the current Phase 1-5 application flow: what runs in the frontend, what runs in the backend, the API boundaries, and the bounded action loop inside the backend orchestrator.
 
 ## System split
 
@@ -11,7 +11,8 @@ flowchart LR
         Viewer[Select image and viewer mode]
         DetectForm[Run detection form]
         ChatForm[Submit grounded chat question]
-        Results[Render detections, answer, and latest annotated image]
+        Results[Render actions, detections, answer, and annotated image]
+        Export[Download image or JSON summary]
     end
 
     subgraph BE[Backend: FastAPI]
@@ -20,6 +21,7 @@ flowchart LR
         ThumbAPI[GET /api/images/:id/thumbnail/:name]
         DetectAPI[POST /api/detect]
         ChatAPI[POST /api/chat]
+        WarmupAPI[POST /api/warmup]
         AnnotatedAPI[GET /api/annotated/:file]
     end
 
@@ -38,6 +40,7 @@ flowchart LR
     DetectAPI --> AnnotatedAPI
     ChatAPI --> AnnotatedAPI
     AnnotatedAPI --> Results
+    Results --> Export
 
     ImagesAPI --> ImagesDir
     ImageFile --> ImagesDir
@@ -102,9 +105,9 @@ sequenceDiagram
     API-->>UI: answer + route + detections + annotated_image_url
 ```
 
-## Current agent loop
+## Current bounded agent loop
 
-The current implementation is a bounded single-request routing loop inside the backend. It is not the Phase 4 replanning loop yet.
+The current implementation is a bounded single-request action loop inside the backend. Every plan has an explicit action list and is capped at six actions.
 
 ```mermaid
 flowchart TD

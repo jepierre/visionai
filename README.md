@@ -53,18 +53,22 @@ See [docs/agentic-workflow.md](docs/agentic-workflow.md) for the current fronten
 
 ## Current repo state
 
-The repository now includes a working Phase 1-3 application scaffold:
+The repository now includes a working Phase 1-5 application scaffold:
 
 - A FastAPI backend with `GET /api/images`, safe image and thumbnail routes, `POST /api/detect`, `POST /api/chat`, and annotated-image serving.
 - A React, TypeScript, Tailwind, and Vite frontend that loads the image catalog, supports image selection, mask/box/combined display modes, object detection requests, and single-turn grounded chat.
 - Falcon detection normalization and Pillow-based annotation rendering.
 - Ollama-backed visual question answering for direct scene questions and Falcon-first routing for counting, comparison, and location-style prompts.
+- A bounded action planner with `DETECT`, `DETECT_EACH`, `CROP`, `COMPARE`, `VLM`, and `ANSWER` actions.
+- Largest-object crop analysis, Falcon detection caching, serialized GPU inference, model warmup, and downloadable run artifacts.
+- Unit tests for API routes, Falcon normalization/cache behavior, planner actions, and annotation rendering.
 
 Current limitations:
 
 - Falcon live inference can still fail if the host is missing Python development headers required by Triton.
 - Ollama must be running locally and have the configured model pulled before direct VLM responses will work.
-- The planner is still Phase 3 scope only; bounded multi-step replanning from Phase 4 is not implemented yet.
+- Falcon and Ollama live inference still depends on local CUDA, model availability, and available GPU memory.
+- The synchronous single-process backend cannot interrupt a CUDA kernel that is already running after a browser request is abandoned.
 
 ## Phase 0: local validation
 
@@ -170,6 +174,15 @@ Open `http://127.0.0.1:5173` in your browser. The Vite dev server proxies `/api`
 - Chat questions such as counts and count comparisons route through Falcon first.
 - General scene-description questions route directly to Ollama.
 - If either runtime is unavailable, the API returns a 503 error with the blocking dependency in the message.
+- `POST /api/warmup` checks Falcon model loading and Ollama model availability before a demo.
+- The run panel exposes bounded agent actions and can download the annotated image and JSON run summary.
+
+### 4) Run the tests
+
+```bash
+source .venv/bin/activate
+python -m unittest discover -s backend/tests
+```
 
 ## Repository structure
 
@@ -194,5 +207,6 @@ Additional backend subpackages are under `backend/app/` for models, agent orches
 - [MLX-VLM](https://github.com/Blaizzy/mlx-vlm) — Vision language models on Apple Silicon
 - [mlx-vlm-falcon](https://github.com/korale77/mlx-vlm-falcon) — Inspiration for the combined pipeline
 - [Gemma 4 Vision Agent | Object Detection + VLM Pipeline](https://www.youtube.com/watch?v=VFYnD1WREdU&list=PLIsoxylL1dFw&index=6)
+- [What makes up a Vision Language Model](https://www.nvidia.com/en-us/glossary/vision-language-models/)
 
 Falcon Perception and the Gemma 4 docs are the primary model references for this repo. The CUDA/PyTorch Gemma4-Visual-Agent branch and `mlx-vlm-falcon` are useful architecture references. `MLX-VLM` is relevant background for the Apple Silicon ecosystem, but MLX is not a deployment target for this project.

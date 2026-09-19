@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 ExecutionMode = Literal["agent", "falcon", "gemma"]
+AgentAction = Literal["DETECT", "DETECT_EACH", "CROP", "COMPARE", "VLM", "ANSWER"]
 
 
 class ImageSummary(BaseModel):
@@ -49,6 +50,7 @@ class TraceStep(BaseModel):
     title: str
     detail: str
     model: str | None = None
+    action: AgentAction | None = None
 
 
 class DetectionRecord(BaseModel):
@@ -99,3 +101,9 @@ class ChatResponse(BaseModel):
     final_output: str | None = None
     message: str | None = None
     timings: dict[str, float] = Field(default_factory=dict)
+
+
+class WarmupResponse(BaseModel):
+    falcon_ready: bool
+    ollama_ready: bool
+    message: str

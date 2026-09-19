@@ -140,21 +140,46 @@ Current limitation:
 
 ## Phase 4 — Bounded agentic workflow
 
+**Status (2026-09-18): Implemented at the app-code level; live model execution remains environment-dependent.**
+
 1. Add a planner with explicit actions: `DETECT`, `DETECT_EACH`, `CROP`, `COMPARE`, `VLM`, and `ANSWER`.
 2. Permit re-planning after a model step, with a fixed maximum of 4–8 actions.
 3. Use `CROP` for object-detail questions such as “What color is the largest car?”
 4. Surface a compact activity trail in the UI, e.g. “Detecting cars → 9 found → analyzing.”
 5. Preserve each message, execution trace, and annotated output within a browser session.
 
+Implemented in the current repo:
+
+- The planner emits explicit bounded actions: `DETECT`, `DETECT_EACH`, `CROP`, `COMPARE`, `VLM`, and `ANSWER`.
+- Agent plans are capped at six actions and expose action labels in API traces and the frontend.
+- Largest-object detail questions use Falcon grounding, crop the selected bounding box, and send the crop to Ollama.
+- The frontend preserves the current run trace, detections, reasoning, final output, and annotated output for the active session.
+
 **Exit criteria:** compound questions use multiple tools and return a traceable answer without an unbounded tool loop.
 
 ## Phase 5 — Quality, performance, and delivery
+
+**Status (2026-09-18): Implemented at the app-code level; production queueing and cancellation remain deployment concerns.**
 
 1. Cache Falcon detections by image fingerprint and object query.
 2. Add warm-up, an inference queue, request cancellation, and clear model/download failure messages.
 3. Add API tests, renderer tests, and a small fixed image/query regression suite.
 4. Add export for annotated images and response summaries.
 5. Document setup, GPU requirements, model access, and troubleshooting.
+
+Implemented in the current repo:
+
+- Falcon detections are cached by source fingerprint, object query, and annotation mode.
+- Falcon model access and inference are serialized per detector instance to avoid concurrent GPU inference.
+- `POST /api/warmup` reports Falcon and Ollama readiness.
+- Annotated images and JSON run summaries can be downloaded from the frontend.
+- Backend API, planner, cache, and renderer unit tests are included under `backend/tests`.
+- Setup and GPU troubleshooting are documented in `README.md`, `AGENTS.md`, and `PHASE0_REPORT.md`.
+
+Remaining environment/deployment limits:
+
+- The synchronous FastAPI process cannot forcibly cancel an in-flight CUDA kernel; abandoned requests may still finish in the backend.
+- A multi-worker production inference queue is not enabled because Falcon model state is intentionally kept in one warm process.
 
 **Exit criteria:** the app is repeatable to install, reliable under normal use, and has a tested demo dataset.
 
