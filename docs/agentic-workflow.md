@@ -19,6 +19,8 @@ flowchart LR
         ImagesAPI[GET /api/images]
         ImageFile[GET /api/images/:id/file]
         ThumbAPI[GET /api/images/:id/thumbnail/:name]
+        HealthAPI[GET /api/health]
+        ModelsAPI[GET /api/ollama/models]
         DetectAPI[POST /api/detect]
         ChatAPI[POST /api/chat]
         WarmupAPI[POST /api/warmup]
@@ -27,12 +29,13 @@ flowchart LR
 
     subgraph Data[Local data and model services]
         ImagesDir[images/ directory]
-        OutputDir[output/ annotated images and thumbnails]
         Falcon[Falcon Perception]
         Ollama[Ollama HTTP API]
     end
 
     Gallery --> ImagesAPI
+    Results --> HealthAPI
+    Results --> ModelsAPI
     Viewer --> ImageFile
     Viewer --> ThumbAPI
     DetectForm --> DetectAPI
@@ -45,12 +48,9 @@ flowchart LR
     ImagesAPI --> ImagesDir
     ImageFile --> ImagesDir
     ThumbAPI --> ImagesDir
-    ThumbAPI --> OutputDir
     DetectAPI --> Falcon
-    DetectAPI --> OutputDir
     ChatAPI --> Falcon
     ChatAPI --> Ollama
-    ChatAPI --> OutputDir
 ```
 
 ## Current request and response paths
@@ -102,7 +102,7 @@ sequenceDiagram
         OLL-->>ORCH: answer
     end
 
-    API-->>UI: answer + route + detections + annotated_image_url
+    API-->>UI: answer + route + detections + annotated_image_url + trace
 ```
 
 ## Current bounded agent loop
@@ -135,9 +135,11 @@ flowchart TD
 ## Frontend responsibilities
 
 - Load the image catalog from `GET /api/images` on startup.
+- Load available Ollama model tags from `GET /api/ollama/models` on startup.
 - Let the user select an image and annotation mode.
 - Call `POST /api/detect` for explicit object detection requests.
 - Call `POST /api/chat` for natural-language questions.
+- Allow Falcon-only, Gemma-only, and bounded agent execution modes.
 - Display the selected image, the latest annotated image, detections, status messages, errors, and chat history.
 
 ## Backend responsibilities
@@ -145,7 +147,7 @@ flowchart TD
 - Restrict image access to the repo `images/` directory.
 - Generate and serve thumbnails.
 - Normalize Falcon output into a stable API response shape.
-- Render annotated PNG files into `output/annotated`.
+- Render annotated PNG files and serve them through the annotated-image API.
 - Decide whether a chat question should go directly to Ollama or through Falcon first.
 - Answer count and count-comparison prompts deterministically after detection.
 
@@ -153,6 +155,8 @@ flowchart TD
 
 - Frontend to backend:
   - `GET /api/images`
+    - `GET /api/health`
+    - `GET /api/ollama/models`
   - `GET /api/images/{image_id}/file`
   - `GET /api/images/{image_id}/thumbnail/{thumbnail_name}`
   - `POST /api/detect`
@@ -165,6 +169,7 @@ flowchart TD
 
 ## Notes on scope
 
-- The implemented loop is Phase 3 routing, not the Phase 4 multi-step replanning agent yet.
+- The implemented planner is bounded to six actions and uses explicit routes for direct VLM, counting, comparison, grounding, and largest-object crop analysis. It does not dynamically re-plan after a model step.
+- The frontend keeps the latest run, trace, detections, reasoning, and token usage in browser memory; there is no persistent history store.
 - There is no browser-side filesystem access; all image access goes through the backend.
 - Falcon and Ollama are still sensitive to local runtime availability, GPU memory, and host dependencies.

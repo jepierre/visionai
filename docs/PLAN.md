@@ -7,7 +7,7 @@ Build a local CUDA/PyTorch web app that reads images from `images/`, lets a user
 The agent uses:
 
 - **Falcon Perception** for open-vocabulary object detection and instance segmentation.
-- **Gemma 4 E4B instruction-tuned VLM** for query planning, image reasoning, and final answers.
+- **A local Ollama-served Gemma 4B-class VLM** for image reasoning and final answers. The planner is implemented in Python rather than delegated to Gemma.
 - **No Apple Silicon or MLX support** in the first release.
 - **No OpenCV dependency** unless a later feature has a demonstrated need for it. Pillow, NumPy, and pycocotools cover image loading, annotation rendering, and mask decoding for this scope.
 
@@ -17,7 +17,7 @@ The agent uses:
 - Python 3.10+.
 - CUDA-compatible PyTorch and torchvision.
 - A local Ollama runtime serving a quantized Gemma 4B-class model.
-- Sufficient GPU memory for the selected Gemma 4 checkpoint and Falcon Perception; validate this before UI work begins.
+- Sufficient GPU memory for Falcon Perception and the selected Ollama model; validate this before live inference.
 
 ## Architecture
 
@@ -46,13 +46,12 @@ The Python service owns models and inference. The browser never accesses the fil
 **Status (2026-09-18): Partially ready; local inference validation is still pending for live model runs.**
 
 - The detected host is Linux with Python 3.10.12, an NVIDIA GeForce RTX 3070, approximately 8 GiB of GPU memory, and NVIDIA driver 595.58.03.
-- The repository `.venv` exists, and the base Python package set has been installed, including FastAPI and Uvicorn for the app server.
 - The Gemma runtime is intentionally Ollama-only for this project. The repo now targets Ollama over HTTP, usually through the local Docker container on `http://localhost:11434`.
 - The sample validation image is `images/dog_running_in_park.jpg`.
 - The RTX 3070 is a reasonable fit for a quantized Gemma 4B-class model, but Falcon and Gemma must be tested separately to avoid GPU memory pressure. Larger checkpoints may exceed the available VRAM.
 
 1. Create the Python environment and install CUDA/PyTorch dependencies plus the Falcon Perception PyTorch package.
-      **Status:** `.venv` has been created; dependency and CUDA validation remain pending.
+      **Status:** dependency and CUDA validation remain pending.
 2. Install and start Ollama, then pull a local 4B-class Gemma model such as `gemma3:4b`.
       **Status:** blocked until Ollama is installed and the model is available locally; Hugging Face is not the planned runtime path.
 3. Add a small script that loads Falcon, runs a known image/object query, and writes normalized detection metadata.
@@ -143,7 +142,7 @@ Current limitation:
 **Status (2026-09-18): Implemented at the app-code level; live model execution remains environment-dependent.**
 
 1. Add a planner with explicit actions: `DETECT`, `DETECT_EACH`, `CROP`, `COMPARE`, `VLM`, and `ANSWER`.
-2. Permit re-planning after a model step, with a fixed maximum of 4–8 actions.
+2. Keep each plan within a fixed maximum of six actions. Re-planning after a model step is not implemented.
 3. Use `CROP` for object-detail questions such as “What color is the largest car?”
 4. Surface a compact activity trail in the UI, e.g. “Detecting cars → 9 found → analyzing.”
 5. Preserve each message, execution trace, and annotated output within a browser session.
@@ -174,7 +173,7 @@ Implemented in the current repo:
 - `POST /api/warmup` reports Falcon and Ollama readiness.
 - Annotated images and JSON run summaries can be downloaded from the frontend.
 - Backend API, planner, cache, and renderer unit tests are included under `backend/tests`.
-- Setup and GPU troubleshooting are documented in `README.md`, `AGENTS.md`, and `PHASE0_REPORT.md`.
+- Setup and GPU troubleshooting are documented in `README.md` and `AGENTS.md`.
 
 Remaining environment/deployment limits:
 
@@ -191,10 +190,10 @@ visionai/
 ├── backend/
 │   └── app/                 # FastAPI routes, services, models, agent, rendering
 ├── frontend/                # React, TypeScript, Tailwind, and Vite application
-├── output/                  # generated annotations; gitignored
-├── requirements.txt         # app and validation Python dependencies
-├── PLAN.md
-└── README.md
+├── docs/                  # plan and workflow documentation
+├── backend/requirements.txt # app and validation Python dependencies
+├── README.md
+└── AGENTS.md
 ```
 
 ## Technology choices
@@ -207,7 +206,7 @@ visionai/
 | Styling | Tailwind CSS | The repo currently uses Tailwind utilities plus a small Tailwind component layer. |
 | Image handling | Pillow + NumPy | Sufficient for image IO, compositing, masks, and boxes without OpenCV. |
 | Mask format | pycocotools | Decodes Falcon’s COCO RLE segmentation masks. |
-| Validation | Pytest + Playwright | Covers the backend pipeline and user-facing browser flow. |
+| Validation | Python `unittest` + Vite build | Covers backend behavior and frontend compilation; browser E2E coverage is not currently checked in. |
 
 ## Out of scope for version 1
 
