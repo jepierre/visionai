@@ -2,12 +2,12 @@
 
 VisionAI is a local web application in active development for asking questions about images stored in the `images/` directory. It combines Falcon Perception object masks and bounding boxes with a local Gemma 4B-class model served through Ollama, so answers can be grounded in visible evidence.
 
-## Planned user experience
+## User experience
 
 1. Place images in `images/`.
 2. Open the local app and select an image from the gallery.
 3. Enter a question in the prompt bar at the bottom and select **Submit**.
-4. The agent decides whether it needs detection, visual reasoning, or both.
+4. Choose Falcon-only, Gemma-only, or agent mode, then submit the request.
 5. The app shows the answer and an annotated image with masks, boxes, or both.
 
 Examples:
@@ -39,13 +39,13 @@ Version 1 is CUDA/PyTorch only.
 
 Apple Silicon and MLX support are intentionally not included in the first version.
 
-## Planned stack
+## Stack
 
 - **Backend:** Python, FastAPI, Uvicorn, PyTorch/CUDA.
 - **Frontend:** React, TypeScript, Vite, and Tailwind CSS.
 - **Annotation rendering:** Pillow, NumPy, pycocotools.
 - **Local VLM runtime:** Ollama with a Gemma 4B-class model in Docker.
-- **Testing:** Pytest and Playwright.
+- **Testing:** Python `unittest` for backend API, planner, cache, and renderer coverage; the frontend is validated with the Vite production build.
 
 OpenCV is not part of the planned dependency set. The initial scope only needs Pillow and NumPy for image loading and mask/box overlays. We will reconsider it only if a future capability specifically requires it.
 
@@ -72,18 +72,19 @@ Current limitations:
 
 ## Phase 0: local validation
 
-Phase 0 is a CUDA validation harness. It creates an isolated Python environment, checks GPU readiness, and includes separate smoke tests for Falcon and the local Gemma model. The tests intentionally load one model at a time.
+Phase 0 is a CUDA validation harness. It creates an isolated Python environment, checks GPU readiness, and includes separate smoke tests for Falcon and the local Ollama model. The tests intentionally load one model at a time.
 
-### 1) Create the Python environment
+### 1) Create and use the Python environment
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-python -m pip install -r requirements.txt
-cp .env.example .env
+python -m pip install -r backend/requirements.txt
 ```
+
+Activate the environment with `source .venv/bin/activate` in each new shell before running the backend, validation scripts, or tests.
 
 > If your NVIDIA driver supports a newer CUDA wheel, replace `cu126` with the matching PyTorch wheel tag such as `cu128`.
 
@@ -108,9 +109,9 @@ If Docker does not expose GPUs on your host, follow the NVIDIA Container Toolkit
 docker exec -it ollama ollama pull gemma3:4b
 ```
 
-You can replace `gemma3:4b` with any local 4B-class model tag available in your Ollama registry. The default `.env.example` value is `gemma3:4b`.
+You can replace `gemma3:4b` with any local 4B-class model tag available in your Ollama registry. Pass the selected tag to the smoke test with `--model`.
 
-### 3) Run the complete app with Docker Compose
+### 4) Run the complete app with Docker Compose
 
 The repository includes a resource-bounded Compose stack for Ollama, the CUDA backend, and the static frontend. The backend and Ollama services each reserve one NVIDIA GPU; CPU and memory limits prevent idle services from consuming the whole host.
 
@@ -147,9 +148,9 @@ Pull the model with the separately managed Ollama service, not `composectl.sh`:
 docker exec -it ollama ollama pull "$OLLAMA_MODEL"
 ```
 
-Compose uses `http://ollama:11434` internally for the backend. Keep `OLLAMA_BASE_URL=http://localhost:11434` for host-run Python scripts; the Compose service overrides it only inside the backend container.
+Compose uses `http://ollama:11434` internally for the backend. Host-run scripts default to `http://localhost:11434`.
 
-### 4) Validate the environment and smoke tests
+### 5) Validate the environment and smoke tests
 
 ```bash
 python scripts/validate_environment.py
@@ -165,19 +166,6 @@ If Falcon fails with a Triton compile error mentioning `Python.h`, install the P
 sudo apt install python3.10-dev
 ```
 
-### 5) Local Ollama configuration
-
-The repo uses `OLLAMA_BASE_URL` and `OLLAMA_MODEL` in the environment file.
-
-```bash
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=gemma3:4b
-```
-
-If a different service runs inside Docker and your Python app is also inside Docker on the same virtual network, use `OLLAMA_BASE_URL=http://ollama:11434` instead.
-
-See [PHASE0_REPORT.md](PHASE0_REPORT.md) for the current machine-specific validation notes and acceptance status.
-
 ## Run the app
 
 Start the backend and frontend in separate terminals.
@@ -185,7 +173,6 @@ Start the backend and frontend in separate terminals.
 ### 1) Start the backend
 
 ```bash
-source .venv/bin/activate
 uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -210,27 +197,26 @@ Open `http://127.0.0.1:5173` in your browser. The Vite dev server proxies `/api`
 
 - The gallery is populated from `images/`.
 - `Run detection` calls Falcon and returns detections plus an annotated image when Falcon is available.
-- Chat questions such as counts and count comparisons route through Falcon first.
+- Falcon mode runs detection and annotation only; Gemma mode sends the image directly to Ollama; agent mode selects a bounded workflow.
+- Count and comparison questions use deterministic Falcon results, while grounded location/detail questions can combine Falcon with Ollama.
 - General scene-description questions route directly to Ollama.
 - If either runtime is unavailable, the API returns a 503 error with the blocking dependency in the message.
-- `POST /api/warmup` checks Falcon model loading and Ollama model availability before a demo.
+- `GET /api/health`, `GET /api/ollama/models`, and `POST /api/warmup` expose service and model readiness checks.
 - The run panel exposes bounded agent actions and can download the annotated image and JSON run summary.
 
 ### 4) Run the tests
 
 ```bash
-source .venv/bin/activate
 python -m unittest discover -s backend/tests
 ```
 
 ## Repository structure
 
 ```text
-backend/      FastAPI app, routing, model adapters, agent logic, rendering
+backend/      FastAPI app, routing, model adapters, agent logic, rendering, and tests
 frontend/     React/Vite application
 images/       Source images for the first version
-output/       Generated thumbnails and annotated images
-PLAN.md       Phased implementation plan
+docs/         Phased plan and agent workflow documentation
 README.md     Project overview and setup direction
 scripts/      Validation and smoke-test utilities
 ```

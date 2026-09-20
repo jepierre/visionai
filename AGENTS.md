@@ -6,9 +6,9 @@ This repo is a local grounded image-chat application under active development. T
 
 - Falcon Perception for object detection and segmentation
 - a local Gemma 4B-class model served through Ollama for reasoning and answer generation
-- a Python FastAPI backend and React, TypeScript, Tailwind, and Vite frontend already scaffolded through Phase 3
+- a Python FastAPI backend and React, TypeScript, Tailwind, and Vite frontend implementing the Phase 1-5 application code
 
-See [README.md](README.md), [PLAN.md](PLAN.md), and [PHASE0_REPORT.md](PHASE0_REPORT.md) for the authoritative product and implementation details.
+See [README.md](README.md), [docs/PLAN.md](docs/PLAN.md), and [_archives/PHASE0_REPORT.md](_archives/PHASE0_REPORT.md) for the authoritative product and implementation details.
 
 ## Working conventions
 
@@ -19,7 +19,7 @@ See [README.md](README.md), [PLAN.md](PLAN.md), and [PHASE0_REPORT.md](PHASE0_RE
 
 ## Environment and setup
 
-- Use a Python virtual environment at the repo root: `.venv`
+- Create the repository Python environment with `python3 -m venv .venv` and activate it with `source .venv/bin/activate` in each shell.
 - Install CUDA PyTorch first, matching the host driver version before installing the Python package set.
 - Use the local Ollama container on `http://localhost:11434` by default.
 - Typical local model tag: `gemma3:4b`
@@ -31,8 +31,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-python -m pip install -r requirements-phase0.txt
-cp .env.example .env
+python -m pip install -r backend/requirements.txt
 ```
 
 ```bash
@@ -77,8 +76,7 @@ npm run dev -- --host 0.0.0.0
 ## Files to consult first
 
 - [README.md](README.md) for setup and workflow
-- [PLAN.md](PLAN.md) for phased implementation direction
-- [PHASE0_REPORT.md](PHASE0_REPORT.md) for machine-specific validation notes
+- [docs/PLAN.md](docs/PLAN.md) for phased implementation direction
 - [backend/app/main.py](backend/app/main.py) for the live API entrypoint
 - [frontend/src/App.tsx](frontend/src/App.tsx) for the current UI flow
 - [scripts/validate_environment.py](scripts/validate_environment.py) for environment checks
@@ -87,7 +85,7 @@ npm run dev -- --host 0.0.0.0
 ## When adding or updating code
 
 - Prefer small, testable changes.
-- Keep Phase 0 scripts explicit and single-model.
-- If implementing future server code, keep the architecture aligned with the plan in [PLAN.md](PLAN.md).
-- Preserve the current Phase 1-3 contract: `/api/images`, `/api/detect`, `/api/chat`, and annotated image serving.
-- Document any environment assumptions in the relevant README or phase report instead of burying them in code comments.
+- Keep the Phase 0 scripts explicit and single-model.
+- If implementing future server code, keep the architecture aligned with the plan in [docs/PLAN.md](docs/PLAN.md).
+- Preserve the current Phase 1-5 contract: `/api/health`, `/api/images`, `/api/ollama/models`, `/api/detect`, `/api/chat`, `/api/warmup`, and annotated image serving.
+- Document any environment assumptions in the relevant README or workflow documentation instead of burying them in code comments.

@@ -53,7 +53,8 @@ def main() -> int:
         "packages": {name: importlib.util.find_spec(name) is not None for name in REQUIRED_PACKAGES},
         "models": {
             "falcon": os.getenv("FALCON_HF_MODEL_ID", "tiiuae/Falcon-Perception"),
-            "gemma": os.getenv("GEMMA_HF_MODEL_ID", "google/gemma-4-E4B-it"),
+            "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+            "ollama_model": os.getenv("OLLAMA_MODEL", "gemma3:4b"),
         },
     }
 
