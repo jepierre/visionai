@@ -129,6 +129,24 @@ Open `http://127.0.0.1:5173`. Useful commands:
 ./scripts/composectl.sh stop
 ```
 
+#### Use an external Ollama container
+
+If Ollama is already running separately, use the external Compose file. It starts only the backend and frontend and connects the backend to Ollama through `host.docker.internal:11434`.
+
+```bash
+COMPOSE_FILE=docker-compose.external.yml ./scripts/composectl.sh build
+COMPOSE_FILE=docker-compose.external.yml ./scripts/composectl.sh start
+COMPOSE_FILE=docker-compose.external.yml ./scripts/composectl.sh status
+```
+
+Override the external Ollama address with `EXTERNAL_OLLAMA_BASE_URL` when it is not running on the Docker host.
+
+Pull the model with the separately managed Ollama service, not `composectl.sh`:
+
+```bash
+docker exec -it ollama ollama pull "$OLLAMA_MODEL"
+```
+
 Compose uses `http://ollama:11434` internally for the backend. Keep `OLLAMA_BASE_URL=http://localhost:11434` for host-run Python scripts; the Compose service overrides it only inside the backend container.
 
 ### 4) Validate the environment and smoke tests
