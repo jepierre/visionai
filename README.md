@@ -51,6 +51,8 @@ OpenCV is not part of the planned dependency set. The initial scope only needs P
 
 See [docs/agentic-workflow.md](docs/agentic-workflow.md) for the current frontend/backend workflow diagram, API boundaries, and agent routing loop.
 
+See [docs/model-background.md](docs/model-background.md) for background on vision-language models, Falcon Perception, Gemma, model tradeoffs, and edge-inference latency.
+
 ## Current repo state
 
 The repository now includes a working Phase 1-5 application scaffold:
@@ -69,6 +71,16 @@ Current limitations:
 - Ollama must be running locally and have the configured model pulled before direct VLM responses will work.
 - Falcon and Ollama live inference still depends on local CUDA, model availability, and available GPU memory.
 - The synchronous single-process backend cannot interrupt a CUDA kernel that is already running after a browser request is abandoned.
+
+## UI demo
+
+The screenshots below show the running app with `dog_running_in_park.jpg` selected from the gallery. The default question, “How many dogs are in this image?”, demonstrates the intended grounded-image workflow using the sample dog image.
+
+![VisionAI UI with dog running in the park selected](docs/images/visionai-dog-demo-overview.png)
+
+Full-page capture:
+
+![VisionAI full-page dog demo](docs/images/visionai-dog-demo.png)
 
 ## Phase 0: local validation
 
